@@ -5,7 +5,7 @@ Redesigned for beautiful, elegant interface with natural flow.
 
 import os
 import time
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Dict, Any
 from enum import Enum
 
 from rich.console import Console
@@ -21,6 +21,7 @@ from rich.console import Group
 
 from ascii_art import TITLE_ART, CHARACTER_ART, Colors, get_random_loading_message, SIMPLE_TITLE
 from settings import SettingsManager
+from dice_system import DiceRoller
 
 
 class MenuChoice(Enum):
@@ -154,109 +155,568 @@ class MenuSystem:
             except KeyboardInterrupt:
                 return MenuChoice.QUIT
     
-    def show_character_creation(self) -> Optional[str]:
-        """Handle character creation with clean interface and centered panel content."""
-        self.clear_screen()
-        self.console.print("\n" * 2)
-        title_text = Text(SIMPLE_TITLE, style=Colors.TITLE)
-        self.console.print(Align.center(title_text))
-        self.console.print()
-        # Split the art and text into lines and center each line
-        char_lines = [
-            "Create Your Hero",
-            "",
-            "[ Sword ] [ Shield ]",
-            "Choose your destiny"
-        ]
-        char_group = Group(*[Align.center(Text(line, style=Colors.ACCENT)) for line in char_lines])
-        char_panel = Panel(
-            char_group,
-            title="Character Creation",
-            title_align="center",
-            style=Colors.ACCENT,
-            border_style=Colors.ACCENT,
-            padding=(2, 4),
-            width=55
+    def show_character_creation(self) -> Optional[Dict[str, Any]]:
+        """Handle comprehensive D&D character creation with dice rolling."""
+        from character_data import (
+            get_race_choices, get_class_choices, get_background_choices,
+            RACES, CLASSES, BACKGROUNDS,
+            apply_racial_bonuses, get_racial_proficiencies,
+            get_class_proficiencies, get_background_proficiencies,
+            calculate_starting_hp, calculate_armor_class
         )
-        self.console.print(Align.center(char_panel))
-        self.console.print("\n")
-        # Clean prompt for name
+        
+        roller = DiceRoller(self.console)
+        character_data = {}
+        
+        # Step 1: Character Name
+        character_data["name"] = self._get_character_name()
+        if not character_data["name"]:
+            return None
+        
+        # Step 2: Choose Ability Score Method
+        stat_method = self._choose_stat_method()
+        if not stat_method:
+            return None
+        
+        # Step 3: Roll/Assign Ability Scores
+        base_stats = self._roll_ability_scores(roller, stat_method)
+        if not base_stats:
+            return None
+        
+        # Step 4: Choose Race
+        character_data["race"] = self._choose_race()
+        if not character_data["race"]:
+            return None
+        
+        # Step 5: Apply Racial Bonuses
+        final_stats = apply_racial_bonuses(base_stats, character_data["race"])
+        character_data.update({
+            "strength": final_stats["Strength"],
+            "dexterity": final_stats["Dexterity"],
+            "constitution": final_stats["Constitution"],
+            "intelligence": final_stats["Intelligence"],
+            "wisdom": final_stats["Wisdom"],
+            "charisma": final_stats["Charisma"]
+        })
+        
+        # Step 6: Choose Class
+        character_data["character_class"] = self._choose_class()
+        if not character_data["character_class"]:
+            return None
+        
+        # Step 7: Choose Background
+        character_data["background"] = self._choose_background()
+        if not character_data["background"]:
+            return None
+        
+        # Step 8: Finalize Character Details
+        character_data.update(self._finalize_character(character_data, roller))
+        
+        # Step 9: Show Final Character Sheet
+        if not self._show_final_character_sheet(character_data):
+            return None
+        
+        return character_data
+    
+    def _get_character_name(self) -> Optional[str]:
+        """Get character name from player."""
         while True:
-            name_prompt = Text()
-            name_prompt.append("What is your hero's name?", style=Colors.INFO)
-            
-            name = Prompt.ask(
-                name_prompt,
-                default="Adventurer"
-            ).strip()
-            
-            # Clear screen after input
-            import os
-            os.system('cls' if os.name == 'nt' else 'clear')
-            self.console.clear()
-            
-            if name and len(name) <= 20 and name.replace(" ", "").isalpha():
-                break
-            
-            # Redisplay the character creation screen
+            self.clear_screen()
             self.console.print("\n" * 2)
-            title_text = Text(SIMPLE_TITLE, style=Colors.TITLE)
+            title_text = Text("DUNGEONS & DAEMONS", style=Colors.TITLE)
             self.console.print(Align.center(title_text))
             self.console.print()
+            
             char_lines = [
-                "Create Your Hero",
+                "CHARACTER CREATION",
                 "",
-                "[ Sword ] [ Shield ]",
-                "Choose your destiny"
+                "Step 1: Choose Your Hero's Name",
+                "",
+                "What name shall be whispered in taverns",
+                "and carved upon monuments?"
             ]
             char_group = Group(*[Align.center(Text(line, style=Colors.ACCENT)) for line in char_lines])
             char_panel = Panel(
                 char_group,
-                title="Character Creation",
+                title="Creating Your Legend",
                 title_align="center",
                 style=Colors.ACCENT,
                 border_style=Colors.ACCENT,
                 padding=(2, 4),
-                width=55
+                width=80
             )
             self.console.print(Align.center(char_panel))
-            self.console.print("\n")
+            self.console.print()
             
+            name_prompt = Text()
+            name_prompt.append("Enter your hero's name", style=Colors.INFO)
+            name_prompt.append(" (or 'back' to return)", style=Colors.MUTED)
+            
+            name = Prompt.ask(name_prompt, default="").strip()
+            
+            if name.lower() == 'back':
+                return None
+            
+            if name and len(name) <= 20 and name.replace(" ", "").replace("'", "").isalpha():
+                return name
+            
+            # Show error
+            self.console.print()
             error_panel = Panel(
-                Align.center(Text("Please enter a valid name (letters only, 1-20 characters)", style=Colors.ERROR)),
+                Align.center(Text("Name must be 1-20 characters and contain only letters", style=Colors.ERROR)),
                 style=Colors.ERROR,
                 border_style=Colors.ERROR,
                 width=60
             )
             self.console.print(Align.center(error_panel))
-        # Clean confirmation
+            time.sleep(2)
+    
+    def _choose_stat_method(self) -> Optional[str]:
+        """Choose method for determining ability scores."""
+        while True:
+            self.clear_screen()
+            self.console.print("\n" * 2)
+            title_text = Text("DUNGEONS & DAEMONS", style=Colors.TITLE)
+            self.console.print(Align.center(title_text))
+            self.console.print()
+            
+            method_lines = [
+                "ABILITY SCORE GENERATION",
+                "",
+                "Step 2: Choose Your Stat Rolling Method",
+                "",
+                "How shall the fates determine your abilities?"
+            ]
+            method_group = Group(*[Align.center(Text(line, style=Colors.ACCENT)) for line in method_lines])
+            method_panel = Panel(
+                method_group,
+                title="Rolling the Dice of Destiny",
+                title_align="center",
+                style=Colors.ACCENT,
+                border_style=Colors.ACCENT,
+                padding=(2, 4),
+                width=80
+            )
+            self.console.print(Align.center(method_panel))
+            self.console.print()
+            
+            # Show options
+            methods_table = Table.grid(padding=(0, 2))
+            methods_table.add_column(justify="center", width=6)
+            methods_table.add_column(justify="left", width=25)
+            methods_table.add_column(justify="left", width=35)
+            
+            methods = [
+                ("1", "4d6 Drop Lowest", "Roll 4d6, drop lowest (Heroic)"),
+                ("2", "3d6 Straight", "Roll 3d6 for each stat (Classic)"),
+                ("3", "Standard Array", "Use preset array: 15,14,13,12,10,8"),
+                ("4", "Point Buy", "Allocate 27 points (Balanced)")
+            ]
+            
+            for num, name, desc in methods:
+                methods_table.add_row(
+                    Text(f"[{num}]", style=Colors.SELECTED),
+                    Text(name, style=Colors.INFO),
+                    Text(desc, style=Colors.MUTED)
+                )
+            
+            methods_panel = Panel(
+                methods_table,
+                title="Available Methods",
+                title_align="center",
+                style=Colors.INFO,
+                border_style=Colors.INFO,
+                padding=(1, 2),
+                width=80
+            )
+            self.console.print(Align.center(methods_panel))
+            self.console.print()
+            
+            choice_prompt = Text()
+            choice_prompt.append("Choose method", style=Colors.INFO)
+            choice_prompt.append(" (1-4, or 'back')", style=Colors.MUTED)
+            
+            choice = Prompt.ask(choice_prompt, choices=["1", "2", "3", "4", "back"], default="1")
+            
+            if choice == "back":
+                return None
+            
+            method_map = {
+                "1": "4d6_drop_lowest",
+                "2": "3d6",
+                "3": "array",
+                "4": "point_buy"
+            }
+            
+            return method_map[choice]
+    
+    def _roll_ability_scores(self, roller: DiceRoller, method: str) -> Optional[Dict[str, int]]:
+        """Roll ability scores using chosen method."""
+        import time
+        
+        if method == "array":
+            return self._assign_standard_array()
+        elif method == "point_buy":
+            return self._point_buy_system()
+        else:
+            return self._roll_stats_with_dice(roller, method)
+    
+    def _roll_stats_with_dice(self, roller: DiceRoller, method: str) -> Optional[Dict[str, int]]:
+        """Roll stats with dice animation."""
+        import time
+        stats = {}
+        stat_names = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"]
+        
+        for stat_name in stat_names:
+            self.clear_screen()
+            self.console.print("\n" * 2)
+            title_text = Text("ROLLING YOUR DESTINY", style=Colors.TITLE)
+            self.console.print(Align.center(title_text))
+            self.console.print()
+            
+            # Roll the dice
+            if method == "4d6_drop_lowest":
+                rolls = [roller.roll_dice(1, 6).rolls[0] for _ in range(4)]
+                sorted_rolls = sorted(rolls, reverse=True)
+                final_value = sum(sorted_rolls[:3])
+                roller.display_stat_roll(stat_name, rolls, final_value)
+            else:  # 3d6
+                rolls = [roller.roll_dice(1, 6).rolls[0] for _ in range(3)]
+                final_value = sum(rolls)
+                roller.display_stat_roll(stat_name, rolls, final_value)
+            
+            stats[stat_name] = final_value
+            
+            self.console.print()
+            continue_prompt = Text()
+            continue_prompt.append("Press Enter to continue...", style=Colors.MUTED)
+            Prompt.ask(continue_prompt, default="")
+        
+        return stats
+    
+    def _assign_standard_array(self) -> Optional[Dict[str, int]]:
+        """Let player assign standard array values."""
+        # This would be a more complex interface - for now, auto-assign
+        return {
+            "Strength": 15,
+            "Dexterity": 14,
+            "Constitution": 13,
+            "Intelligence": 12,
+            "Wisdom": 10,
+            "Charisma": 8
+        }
+    
+    def _point_buy_system(self) -> Optional[Dict[str, int]]:
+        """Point buy system - simplified for now."""
+        return {
+            "Strength": 13,
+            "Dexterity": 14,
+            "Constitution": 13,
+            "Intelligence": 12,
+            "Wisdom": 12,
+            "Charisma": 10
+        }
+    
+    def _choose_race(self) -> Optional[str]:
+        """Choose character race."""
+        from character_data import RACES, get_race_choices
+        
+        while True:
+            self.clear_screen()
+            self.console.print("\n" * 2)
+            title_text = Text("DUNGEONS & DAEMONS", style=Colors.TITLE)
+            self.console.print(Align.center(title_text))
+            self.console.print()
+            
+            race_lines = [
+                "CHOOSE YOUR HERITAGE",
+                "",
+                "Step 4: Select Your Character's Race",
+                "",
+                "From what lineage do you descend?"
+            ]
+            race_group = Group(*[Align.center(Text(line, style=Colors.ACCENT)) for line in race_lines])
+            race_panel = Panel(
+                race_group,
+                title="Bloodlines and Ancestry",
+                title_align="center",
+                style=Colors.ACCENT,
+                border_style=Colors.ACCENT,
+                padding=(2, 4),
+                width=70
+            )
+            self.console.print(Align.center(race_panel))
+            self.console.print()
+            
+            # Show race options
+            races_table = Table.grid(padding=(0, 2))
+            races_table.add_column(justify="center", width=6)
+            races_table.add_column(justify="left", width=15)
+            races_table.add_column(justify="left", width=45)
+            
+            race_choices = get_race_choices()
+            for i, race_name in enumerate(race_choices, 1):
+                race = RACES[race_name]
+                races_table.add_row(
+                    Text(f"[{i}]", style=Colors.SELECTED),
+                    Text(race_name, style=Colors.INFO),
+                    Text(race.description[:50] + "...", style=Colors.MUTED)
+                )
+            
+            races_panel = Panel(
+                races_table,
+                title="Available Races",
+                title_align="center",
+                style=Colors.INFO,
+                border_style=Colors.INFO,
+                padding=(1, 2),
+                width=80
+            )
+            self.console.print(Align.center(races_panel))
+            self.console.print()
+            
+            choice_prompt = Text()
+            choice_prompt.append("Choose race", style=Colors.INFO)
+            choice_prompt.append(f" (1-{len(race_choices)}, or 'back')", style=Colors.MUTED)
+            
+            valid_choices = [str(i) for i in range(1, len(race_choices) + 1)] + ["back"]
+            choice = Prompt.ask(choice_prompt, choices=valid_choices, default="1")
+            
+            if choice == "back":
+                return None
+            
+            return race_choices[int(choice) - 1]
+    
+    def _choose_class(self) -> Optional[str]:
+        """Choose character class."""
+        from character_data import CLASSES, get_class_choices
+        
+        while True:
+            self.clear_screen()
+            self.console.print("\n" * 2)
+            title_text = Text("DUNGEONS & DAEMONS", style=Colors.TITLE)
+            self.console.print(Align.center(title_text))
+            self.console.print()
+            
+            class_lines = [
+                "CHOOSE YOUR PATH",
+                "",
+                "Step 6: Select Your Character's Class",
+                "",
+                "What calling speaks to your soul?"
+            ]
+            class_group = Group(*[Align.center(Text(line, style=Colors.ACCENT)) for line in class_lines])
+            class_panel = Panel(
+                class_group,
+                title="Paths of Power",
+                title_align="center",
+                style=Colors.ACCENT,
+                border_style=Colors.ACCENT,
+                padding=(2, 4),
+                width=70
+            )
+            self.console.print(Align.center(class_panel))
+            self.console.print()
+            
+            # Show class options
+            classes_table = Table.grid(padding=(0, 2))
+            classes_table.add_column(justify="center", width=6)
+            classes_table.add_column(justify="left", width=15)
+            classes_table.add_column(justify="left", width=45)
+            
+            class_choices = get_class_choices()
+            for i, class_name in enumerate(class_choices, 1):
+                char_class = CLASSES[class_name]
+                classes_table.add_row(
+                    Text(f"[{i}]", style=Colors.SELECTED),
+                    Text(class_name, style=Colors.INFO),
+                    Text(char_class.description[:50] + "...", style=Colors.MUTED)
+                )
+            
+            classes_panel = Panel(
+                classes_table,
+                title="Available Classes",
+                title_align="center",
+                style=Colors.INFO,
+                border_style=Colors.INFO,
+                padding=(1, 2),
+                width=80
+            )
+            self.console.print(Align.center(classes_panel))
+            self.console.print()
+            
+            choice_prompt = Text()
+            choice_prompt.append("Choose class", style=Colors.INFO)
+            choice_prompt.append(f" (1-{len(class_choices)}, or 'back')", style=Colors.MUTED)
+            
+            valid_choices = [str(i) for i in range(1, len(class_choices) + 1)] + ["back"]
+            choice = Prompt.ask(choice_prompt, choices=valid_choices, default="1")
+            
+            if choice == "back":
+                return None
+            
+            return class_choices[int(choice) - 1]
+    
+    def _choose_background(self) -> Optional[str]:
+        """Choose character background."""
+        from character_data import BACKGROUNDS, get_background_choices
+        
+        while True:
+            self.clear_screen()
+            self.console.print("\n" * 2)
+            title_text = Text("DUNGEONS & DAEMONS", style=Colors.TITLE)
+            self.console.print(Align.center(title_text))
+            self.console.print()
+            
+            bg_lines = [
+                "YOUR PAST SHAPES YOU",
+                "",
+                "Step 7: Select Your Background",
+                "",
+                "What did you do before adventure called?"
+            ]
+            bg_group = Group(*[Align.center(Text(line, style=Colors.ACCENT)) for line in bg_lines])
+            bg_panel = Panel(
+                bg_group,
+                title="Life Before Adventure",
+                title_align="center",
+                style=Colors.ACCENT,
+                border_style=Colors.ACCENT,
+                padding=(2, 4),
+                width=70
+            )
+            self.console.print(Align.center(bg_panel))
+            self.console.print()
+            
+            # Show background options
+            bg_table = Table.grid(padding=(0, 2))
+            bg_table.add_column(justify="center", width=6)
+            bg_table.add_column(justify="left", width=15)
+            bg_table.add_column(justify="left", width=45)
+            
+            bg_choices = get_background_choices()
+            for i, bg_name in enumerate(bg_choices, 1):
+                background = BACKGROUNDS[bg_name]
+                bg_table.add_row(
+                    Text(f"[{i}]", style=Colors.SELECTED),
+                    Text(bg_name, style=Colors.INFO),
+                    Text(background.description[:50] + "...", style=Colors.MUTED)
+                )
+            
+            bg_panel = Panel(
+                bg_table,
+                title="Available Backgrounds",
+                title_align="center",
+                style=Colors.INFO,
+                border_style=Colors.INFO,
+                padding=(1, 2),
+                width=80
+            )
+            self.console.print(Align.center(bg_panel))
+            self.console.print()
+            
+            choice_prompt = Text()
+            choice_prompt.append("Choose background", style=Colors.INFO)
+            choice_prompt.append(f" (1-{len(bg_choices)}, or 'back')", style=Colors.MUTED)
+            
+            valid_choices = [str(i) for i in range(1, len(bg_choices) + 1)] + ["back"]
+            choice = Prompt.ask(choice_prompt, choices=valid_choices, default="1")
+            
+            if choice == "back":
+                return None
+            
+            return bg_choices[int(choice) - 1]
+    
+    def _finalize_character(self, character_data: Dict[str, Any], roller: DiceRoller) -> Dict[str, Any]:
+        """Finalize character with calculated stats and equipment."""
+        from character_data import (
+            CLASSES, RACES, BACKGROUNDS,
+            get_class_proficiencies, get_background_proficiencies,
+            calculate_starting_hp, calculate_armor_class
+        )
+        
+        # Calculate derived stats
+        con_modifier = (character_data["constitution"] - 10) // 2
+        dex_modifier = (character_data["dexterity"] - 10) // 2
+        
+        # Hit points
+        char_class = CLASSES[character_data["character_class"]]
+        max_hp = char_class.hit_die + con_modifier
+        
+        # Armor class (base calculation)
+        armor_class = 10 + dex_modifier
+        
+        # Get proficiencies
+        class_profs = get_class_proficiencies(character_data["character_class"])
+        bg_profs = get_background_proficiencies(character_data["background"])
+        
+        # Equipment based on class and background
+        race = RACES[character_data["race"]]
+        background = BACKGROUNDS[character_data["background"]]
+        
+        inventory = ["Backpack", "Bedroll", "Rations (5 days)"]
+        inventory.extend(background.equipment[:3])  # Add some background equipment
+        
+        equipment = {
+            "armor": "Leather Armor",
+            "weapon": "Longsword" if character_data["character_class"] == "Fighter" else "Dagger",
+            "shield": "Shield" if character_data["character_class"] in ["Fighter", "Cleric"] else None,
+            "tools": []
+        }
+        
+        return {
+            "level": 1,
+            "hp": max_hp,
+            "max_hp": max_hp,
+            "armor_class": armor_class + 1,  # +1 for leather armor
+            "proficiency_bonus": 2,
+            "skill_proficiencies": class_profs.get("skills", [])[:2] + bg_profs.get("skills", []),
+            "saving_throw_proficiencies": class_profs.get("saving_throws", []),
+            "inventory": inventory,
+            "equipment": equipment,
+            "experience_points": 0,
+            "gold_pieces": 100,
+            "alignment": "Neutral Good"
+        }
+    
+    def _show_final_character_sheet(self, character_data: Dict[str, Any]) -> bool:
+        """Show final character sheet for confirmation."""
+        self.clear_screen()
+        self.console.print("\n" * 2)
+        title_text = Text("YOUR HERO AWAITS", style=Colors.TITLE)
+        self.console.print(Align.center(title_text))
         self.console.print()
-        welcome_text = Text()
-        welcome_text.append("Welcome, ", style=Colors.SUCCESS)
-        welcome_text.append(name, style=Colors.SELECTED)
-        welcome_text.append("! Your legend awaits...", style=Colors.SUCCESS)
-        welcome_panel = Panel(
-            Align.center(welcome_text),
+        
+        # Character summary
+        summary_lines = [
+            f"Name: {character_data['name']}",
+            f"Race: {character_data['race']} | Class: {character_data['character_class']}",
+            f"Background: {character_data['background']} | Level: {character_data['level']}",
+            "",
+            f"STR: {character_data['strength']} | DEX: {character_data['dexterity']} | CON: {character_data['constitution']}",
+            f"INT: {character_data['intelligence']} | WIS: {character_data['wisdom']} | CHA: {character_data['charisma']}",
+            "",
+            f"HP: {character_data['hp']}/{character_data['max_hp']} | AC: {character_data['armor_class']}",
+            f"Gold: {character_data['gold_pieces']} GP"
+        ]
+        
+        summary_group = Group(*[Align.center(Text(line, style=Colors.INFO)) for line in summary_lines])
+        summary_panel = Panel(
+            summary_group,
+            title="Your Complete Character",
+            title_align="center",
             style=Colors.SUCCESS,
             border_style=Colors.SUCCESS,
-            padding=(1, 2),
-            width=60
+            padding=(2, 4),
+            width=80
         )
-        self.console.print(Align.center(welcome_panel))
+        self.console.print(Align.center(summary_panel))
         self.console.print()
+        
         confirm_prompt = Text()
-        confirm_prompt.append("Begin this adventure?", style=Colors.INFO)
+        confirm_prompt.append("Begin your legendary adventure?", style=Colors.INFO)
         
-        result = Confirm.ask(confirm_prompt, default=True)
-        
-        # Clear screen after confirmation
-        import os
-        os.system('cls' if os.name == 'nt' else 'clear')
-        self.console.clear()
-        
-        if result:
-            return name
-        return None
+        return Confirm.ask(confirm_prompt, default=True)
     
     def show_load_menu(self) -> Optional[str]:
         """Show clean load game menu with centered text."""
@@ -494,7 +954,7 @@ class MenuSystem:
         temp_info = f"""
 Current temperature: {current_temp}
 
-🌡️ Temperature Guide:
+Temperature Guide:
 • 0.0-0.3: Very focused and deterministic
 • 0.4-0.7: Balanced creativity and consistency  
 • 0.8-1.0: More creative and varied responses
@@ -503,7 +963,7 @@ Current temperature: {current_temp}
         
         info_panel = Panel(
             temp_info.strip(),
-            title=Text("🌡️ AI Temperature Settings", style=Colors.MENU_TITLE),
+            title=Text("AI Temperature Settings", style=Colors.MENU_TITLE),
             style=Colors.INFO,
             border_style=Colors.INFO
         )
@@ -511,7 +971,6 @@ Current temperature: {current_temp}
         
         try:
             temp_prompt = Text()
-            temp_prompt.append("🌡️ ", style=Colors.ACCENT)
             temp_prompt.append("Enter temperature (0.0-2.0)", style=Colors.INFO)
             
             new_temp = FloatPrompt.ask(temp_prompt, default=current_temp)
@@ -589,7 +1048,7 @@ Current temperature: {current_temp}
         turns_info = f"""
 Current history length: {current_turns} turns
 
-🔄 History Length Guide:
+History Length Guide:
 • 10 turns: Short, focused sessions
 • 50 turns: Balanced, good for exploration
 • 100 turns: Long, detailed sessions
@@ -598,7 +1057,7 @@ Current history length: {current_turns} turns
         
         info_panel = Panel(
             turns_info.strip(),
-            title=Text("🔄 History Length Settings", style=Colors.MENU_TITLE),
+            title=Text("History Length Settings", style=Colors.MENU_TITLE),
             style=Colors.INFO,
             border_style=Colors.INFO
         )
@@ -606,7 +1065,6 @@ Current history length: {current_turns} turns
         
         try:
             turns_prompt = Text()
-            turns_prompt.append("🔄 ", style=Colors.ACCENT)
             turns_prompt.append("Enter history length (10-200)", style=Colors.INFO)
             
             new_turns = IntPrompt.ask(turns_prompt, default=current_turns)
@@ -672,7 +1130,6 @@ Current history length: {current_turns} turns
     def _reset_settings(self):
         """Reset settings to defaults."""
         reset_prompt = Text()
-        reset_prompt.append("🔄 ", style=Colors.WARNING)
         reset_prompt.append("Reset all settings to defaults?", style=Colors.WARNING)
         
         if Confirm.ask(reset_prompt, default=False):

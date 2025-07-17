@@ -5,7 +5,7 @@ Main game loop and entry point with beautiful, professional interface.
 
 import os
 import sys
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -23,6 +23,7 @@ from settings import SettingsManager
 from menu_system import MenuSystem, MenuChoice
 from ascii_art import Colors, GAME_OVER_ART, get_health_indicator, get_location_prefix, get_item_type, SIMPLE_TITLE
 from error_handler import ErrorHandler, ErrorType, safe_execute
+from dice_system import DiceRoller, d20, d6, d8, d10, d12
 
 
 class DungeonsAndDaemons:
@@ -35,6 +36,7 @@ class DungeonsAndDaemons:
         self.error_handler = ErrorHandler(self.console, self.settings_manager.settings.show_debug_info)
         self.ai_manager: Optional[AIManager] = None
         self.game_state: Optional[GameState] = None
+        self.dice_roller = DiceRoller(self.console)
     
     def initialize_ai_manager(self) -> bool:
         """Initialize the AI manager with automatic setup."""
@@ -64,7 +66,7 @@ class DungeonsAndDaemons:
         
         # Load the game state
         success, game_state = safe_execute(
-            lambda: GameState.load_from_file(save_file),
+            lambda: GameState.load_from_json(save_file),
             self.error_handler,
             ErrorType.SAVE_LOAD,
             f"Loading game from {save_file}"
@@ -97,23 +99,18 @@ class DungeonsAndDaemons:
         return False
 
     def create_new_game(self) -> bool:
-        """Create a new game with automatic AI setup."""
-        # Show character creation
-        character_name = self.menu_system.show_character_creation()
-        if not character_name:
+        """Create a new game with comprehensive D&D character creation."""
+        # Show comprehensive character creation
+        character_data = self.menu_system.show_character_creation()
+        if not character_data:
             return False
         
         # Initialize AI (this now handles all setup automatically)
         if not self.ai_manager and not self.initialize_ai_manager():
             return False
         
-        # Create new character and game state
-        player = Character(
-            name=character_name, 
-            hp=100, 
-            max_hp=100, 
-            inventory=["Old Sword", "Health Potion"]
-        )
+        # Create new character with full D&D stats
+        player = Character(**character_data)
         
         self.game_state = GameState(
             player=player, 
@@ -123,7 +120,7 @@ class DungeonsAndDaemons:
         
         # Generate initial scenario with loading animation
         creating_text = Text()
-        creating_text.append(f"Creating your adventure, {character_name}...", style=Colors.INFO)
+        creating_text.append(f"Weaving the threads of destiny for {character_data['name']}...", style=Colors.INFO)
         
         creating_panel = Panel(
             Align.center(creating_text),
@@ -141,31 +138,37 @@ class DungeonsAndDaemons:
             os.system('cls' if os.name == 'nt' else 'clear')
             self.console.clear()
             
+            # Create rich initial prompt based on character
             initial_prompt = (
-                f"Start a new fantasy RPG adventure for {character_name}. "
-                f"They begin in a village square with an old sword and health potion. "
-                f"Create an engaging opening scenario that sets up the adventure."
+                f"Start a new D&D-style fantasy RPG adventure for {character_data['name']}, "
+                f"a {character_data['race']} {character_data['character_class']} with the {character_data['background']} background. "
+                f"Character stats: STR {character_data['strength']}, DEX {character_data['dexterity']}, "
+                f"CON {character_data['constitution']}, INT {character_data['intelligence']}, "
+                f"WIS {character_data['wisdom']}, CHA {character_data['charisma']}. "
+                f"They begin in a village square, having just arrived to start their adventuring career. "
+                f"Create an engaging opening scenario that reflects their background and abilities, "
+                f"setting up meaningful choices and potential for adventure."
             )
             
             response = self.ai_manager.get_ai_response(self.game_state, initial_prompt)
-            self.update_game_state(response, f"Begin adventure as {character_name}")
+            self.update_game_state(response, f"Begin adventure as {character_data['name']}")
             
             # Auto-save the initial state
             if self.settings_manager.settings.auto_save:
                 safe_execute(
-                    lambda: self.game_state.save_to_file(
-                        self.settings_manager.get_save_path(f"{character_name}_save.json")
+                    lambda: self.game_state.save_to_json(
+                        self.settings_manager.get_save_path(f"{character_data['name']}_save.json")
                     ),
                     self.error_handler,
                     ErrorType.SAVE_LOAD,
-                    f"Auto-saving game for {character_name}"
+                    f"Auto-saving game for {character_data['name']}"
                 )
             
             return True
             
         except Exception as e:
             self.error_handler.handle_error(e, ErrorType.AI_RESPONSE, 
-                                          f"Creating initial scenario for {character_name}")
+                                          f"Creating initial scenario for {character_data['name']}")
             return False
     
     def display_game_state(self, narrative: str = None) -> None:
@@ -191,7 +194,7 @@ class DungeonsAndDaemons:
             )
             self.console.print(Align.center(narrative_panel))
             self.console.print()
-        # Character Info (left)
+        # Character Info (left) - Full D&D Character Sheet
         hp_ratio = self.game_state.player.hp / self.game_state.player.max_hp
         if hp_ratio > 0.7:
             hp_color = Colors.HEALTH_GOOD
@@ -201,37 +204,96 @@ class DungeonsAndDaemons:
             hp_color = Colors.HEALTH_LOW
         health_indicator = get_health_indicator(self.game_state.player.hp, self.game_state.player.max_hp)
         location_prefix = get_location_prefix(self.game_state.current_location)
+        
+        # Get character modifiers
+        player = self.game_state.player
+        str_mod = player.get_modifier_string(player.strength)
+        dex_mod = player.get_modifier_string(player.dexterity)
+        con_mod = player.get_modifier_string(player.constitution)
+        int_mod = player.get_modifier_string(player.intelligence)
+        wis_mod = player.get_modifier_string(player.wisdom)
+        cha_mod = player.get_modifier_string(player.charisma)
+        
         char_info_lines = [
-            Text("Hero:", style=Colors.STAT_LABEL) + Text(f" {self.game_state.player.name}", style=Colors.SELECTED),
-            Text("Health:", style=Colors.STAT_LABEL) + Text(f" {health_indicator} {self.game_state.player.hp}/{self.game_state.player.max_hp}", style=hp_color),
+            Text(f"{player.name}", style=Colors.SELECTED, justify="center"),
+            Text(f"{player.race} {player.character_class} (Lvl {player.level})", style=Colors.INFO, justify="center"),
+            Text(f"{player.background}", style=Colors.MUTED, justify="center"),
+            Text(""),  # Empty line
+            
+            # Core Stats
+            Text("ABILITY SCORES", style=Colors.STAT_LABEL, justify="center"),
+            Text(f"STR {player.strength:2d} ({str_mod:>3s})  DEX {player.dexterity:2d} ({dex_mod:>3s})", style=Colors.STAT_VALUE),
+            Text(f"CON {player.constitution:2d} ({con_mod:>3s})  INT {player.intelligence:2d} ({int_mod:>3s})", style=Colors.STAT_VALUE),
+            Text(f"WIS {player.wisdom:2d} ({wis_mod:>3s})  CHA {player.charisma:2d} ({cha_mod:>3s})", style=Colors.STAT_VALUE),
+            Text(""),  # Empty line
+            
+            # Combat Stats
+            Text("COMBAT", style=Colors.STAT_LABEL, justify="center"),
+            Text("HP:", style=Colors.STAT_LABEL) + Text(f" {health_indicator} {player.hp}/{player.max_hp}", style=hp_color),
+            Text("AC:", style=Colors.STAT_LABEL) + Text(f" {player.armor_class}", style=Colors.STAT_VALUE),
+            Text("Prof:", style=Colors.STAT_LABEL) + Text(f" +{player.proficiency_bonus}", style=Colors.STAT_VALUE),
+            Text(""),  # Empty line
+            
+            # Other Info
+            Text("DETAILS", style=Colors.STAT_LABEL, justify="center"),
+            Text("XP:", style=Colors.STAT_LABEL) + Text(f" {player.experience_points}", style=Colors.STAT_VALUE),
+            Text("Gold:", style=Colors.STAT_LABEL) + Text(f" {player.gold_pieces} GP", style=Colors.STAT_VALUE),
             Text("Location:", style=Colors.STAT_LABEL) + Text(f" {location_prefix} {self.game_state.current_location}", style=Colors.STAT_VALUE)
         ]
         char_info_group = Group(*[Align.left(line) for line in char_info_lines])
         char_info_panel = Panel(
             char_info_group,
-            title="Character Info",
+            title="Character Sheet",
             title_align="center",
             style=Colors.ACCENT,
             border_style=Colors.ACCENT,
             padding=(1, 2),
-            width=38
+            width=50
         )
-        # Inventory (right)
+        # Equipment & Inventory (right)
+        equipment_lines = []
+        
+        # Equipment Section
+        equipment_lines.append(Text("EQUIPMENT", style=Colors.STAT_LABEL, justify="center"))
+        equipment = player.equipment
+        if equipment.get("armor"):
+            equipment_lines.append(Text(f"Armor: {equipment['armor']}", style=Colors.STAT_VALUE))
+        if equipment.get("weapon"):
+            equipment_lines.append(Text(f"Weapon: {equipment['weapon']}", style=Colors.STAT_VALUE))
+        if equipment.get("shield"):
+            equipment_lines.append(Text(f"Shield: {equipment['shield']}", style=Colors.STAT_VALUE))
+        
+        equipment_lines.append(Text(""))  # Empty line
+        
+        # Inventory Section
+        equipment_lines.append(Text("INVENTORY", style=Colors.STAT_LABEL, justify="center"))
         if self.game_state.player.inventory:
-            inventory_lines = [
-                Text(f"{get_item_type(item)} {item}", style=Colors.STAT_VALUE) for item in self.game_state.player.inventory
-            ]
+            for item in self.game_state.player.inventory[:8]:  # Show first 8 items
+                item_icon = get_item_type(item)
+                equipment_lines.append(Text(f"{item_icon} {item}", style=Colors.STAT_VALUE))
+            if len(self.game_state.player.inventory) > 8:
+                equipment_lines.append(Text(f"... and {len(self.game_state.player.inventory) - 8} more", style=Colors.MUTED))
         else:
-            inventory_lines = [Text("[Empty]", style=Colors.MUTED)]
-        inventory_group = Group(*[Align.left(line) for line in inventory_lines])
+            equipment_lines.append(Text("[Empty]", style=Colors.MUTED))
+        
+        # Skills Section (if any)
+        if hasattr(player, 'skill_proficiencies') and player.skill_proficiencies:
+            equipment_lines.append(Text(""))  # Empty line
+            equipment_lines.append(Text("SKILLS", style=Colors.STAT_LABEL, justify="center"))
+            for skill in player.skill_proficiencies[:4]:  # Show first 4 skills
+                equipment_lines.append(Text(f"• {skill}", style=Colors.INFO))
+            if len(player.skill_proficiencies) > 4:
+                equipment_lines.append(Text(f"... +{len(player.skill_proficiencies) - 4} more", style=Colors.MUTED))
+        
+        inventory_group = Group(*[Align.left(line) for line in equipment_lines])
         inventory_panel = Panel(
             inventory_group,
-            title="Inventory",
+            title="Equipment & Gear",
             title_align="center",
             style=Colors.ACCENT,
             border_style=Colors.ACCENT,
             padding=(1, 2),
-            width=38
+            width=50
         )
         # Show side-by-side
         self.console.print(Align.center(Columns([char_info_panel, inventory_panel], align="center", expand=False)))
@@ -287,9 +349,21 @@ class DungeonsAndDaemons:
         try:
             action_prompt = Text()
             action_prompt.append("What do you do?", style=Colors.INFO)
-            action_prompt.append(" (type 'menu' to return)", style=Colors.MUTED)
+            action_prompt.append(" (type 'menu' to return, or '/roll XdY' for dice)", style=Colors.MUTED)
             
             user_input = Prompt.ask(action_prompt).strip()
+            
+            # Handle dice roll commands
+            if user_input.lower().startswith('/roll '):
+                dice_notation = user_input[6:].strip()  # Remove '/roll '
+                self.handle_dice_roll(dice_notation)
+                return self.get_user_input()  # Get another input after rolling
+            
+            # Handle other special commands
+            if user_input.lower().startswith('/check '):
+                skill_name = user_input[7:].strip()
+                self.handle_skill_check(skill_name)
+                return self.get_user_input()  # Get another input after check
             
             # Clear screen after input for clean look
             import os
@@ -307,6 +381,87 @@ class DungeonsAndDaemons:
             
         except KeyboardInterrupt:
             return None
+    
+    def handle_dice_roll(self, notation: str) -> None:
+        """Handle manual dice roll commands."""
+        try:
+            result = self.dice_roller.roll_from_notation(notation, f"Manual roll: {notation}")
+            self.dice_roller.display_roll_result(result, show_animation=True)
+            
+            # Wait for user to continue
+            self.console.print()
+            continue_prompt = Text()
+            continue_prompt.append("Press Enter to continue...", style=Colors.MUTED)
+            Prompt.ask(continue_prompt, default="")
+            
+        except Exception as e:
+            error_panel = Panel(
+                f"Invalid dice notation: {notation}\nExample: 1d20+5, 3d6, 2d8-1",
+                style=Colors.ERROR,
+                border_style=Colors.ERROR,
+                title="Dice Roll Error"
+            )
+            self.console.print(Align.center(error_panel))
+            
+            self.console.print()
+            continue_prompt = Text()
+            continue_prompt.append("Press Enter to continue...", style=Colors.MUTED)
+            Prompt.ask(continue_prompt, default="")
+    
+    def handle_skill_check(self, skill_name: str) -> None:
+        """Handle skill check with character modifiers."""
+        if not self.game_state or not self.game_state.player:
+            return
+        
+        player = self.game_state.player
+        
+        # Get skill modifier
+        try:
+            skill_modifier = player.get_skill_modifier(skill_name.title())
+            result = self.dice_roller.roll_dice(1, 20, skill_modifier, f"{skill_name.title()} Check")
+            
+            # Determine success based on difficulty (simplified)
+            if result.total >= 15:
+                success_text = "SUCCESS!"
+                success_color = Colors.SUCCESS
+            elif result.total >= 10:
+                success_text = "PARTIAL SUCCESS"
+                success_color = Colors.WARNING
+            else:
+                success_text = "FAILURE"
+                success_color = Colors.ERROR
+            
+            self.dice_roller.display_roll_result(result, show_animation=True)
+            
+            # Show result interpretation
+            self.console.print()
+            result_panel = Panel(
+                Align.center(Text(success_text, style=success_color)),
+                style=success_color,
+                border_style=success_color,
+                title=f"{skill_name.title()} Check Result"
+            )
+            self.console.print(Align.center(result_panel))
+            
+            # Wait for user to continue
+            self.console.print()
+            continue_prompt = Text()
+            continue_prompt.append("Press Enter to continue...", style=Colors.MUTED)
+            Prompt.ask(continue_prompt, default="")
+            
+        except Exception as e:
+            error_panel = Panel(
+                f"Unknown skill: {skill_name}\nTry: Athletics, Perception, Stealth, etc.",
+                style=Colors.ERROR,
+                border_style=Colors.ERROR,
+                title="Skill Check Error"
+            )
+            self.console.print(Align.center(error_panel))
+            
+            self.console.print()
+            continue_prompt = Text()
+            continue_prompt.append("Press Enter to continue...", style=Colors.MUTED)
+            Prompt.ask(continue_prompt, default="")
     
     def update_game_state(self, ai_response: dict, user_action: str) -> None:
         """Update game state based on AI response."""

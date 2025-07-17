@@ -8,31 +8,205 @@ from typing import List, Optional, Dict, Any
 
 
 class Character:
-    """Represents the player character with all stats and inventory."""
+    """Represents the player character with full D&D-style stats and abilities."""
     
-    def __init__(self, name: str, hp: int = 100, max_hp: int = 100, inventory: Optional[List[str]] = None):
+    def __init__(self, name: str, hp: int = 100, max_hp: int = 100, inventory: Optional[List[str]] = None,
+                 # D&D Stats
+                 strength: int = 10, dexterity: int = 10, constitution: int = 10,
+                 intelligence: int = 10, wisdom: int = 10, charisma: int = 10,
+                 # Character Details
+                 race: str = "Human", character_class: str = "Fighter", level: int = 1,
+                 background: str = "Folk Hero", alignment: str = "Neutral Good",
+                 # Derived Stats
+                 armor_class: int = 10, proficiency_bonus: int = 2,
+                 # Skills and Proficiencies
+                 skill_proficiencies: Optional[List[str]] = None,
+                 saving_throw_proficiencies: Optional[List[str]] = None,
+                 # Equipment
+                 equipment: Optional[Dict[str, Any]] = None,
+                 # Experience and Money
+                 experience_points: int = 0, gold_pieces: int = 0):
+        
+        # Basic Info
         self.name = name
-        self.hp = hp
-        self.max_hp = max_hp
-        self.inventory = inventory or []
+        self.race = race
+        self.character_class = character_class
+        self.level = level
+        self.background = background
+        self.alignment = alignment
+        
+        # Stats
+        self.strength = strength
+        self.dexterity = dexterity
+        self.constitution = constitution
+        self.intelligence = intelligence
+        self.wisdom = wisdom
+        self.charisma = charisma
+        
+        # Health (recalculate based on constitution if using defaults)
+        if hp == 100 and max_hp == 100:  # Default values, calculate from CON
+            con_modifier = self.get_ability_modifier(constitution)
+            base_hp = 8 + con_modifier  # Fighter starting HP
+            self.max_hp = max(1, base_hp)
+            self.hp = self.max_hp
+        else:
+            self.hp = hp
+            self.max_hp = max_hp
+        
+        # Combat Stats
+        self.armor_class = armor_class
+        self.proficiency_bonus = proficiency_bonus
+        
+        # Skills and Proficiencies
+        self.skill_proficiencies = skill_proficiencies or []
+        self.saving_throw_proficiencies = saving_throw_proficiencies or ["Strength", "Constitution"]
+        
+        # Inventory and Equipment
+        self.inventory = inventory or ["Backpack", "Bedroll", "Rations (5 days)"]
+        self.equipment = equipment or {
+            "armor": "Leather Armor",
+            "weapon": "Longsword",
+            "shield": "Shield",
+            "tools": []
+        }
+        
+        # Progression
+        self.experience_points = experience_points
+        self.gold_pieces = gold_pieces
+    
+    def get_ability_modifier(self, ability_score: int) -> int:
+        """Calculate D&D ability modifier from score."""
+        return (ability_score - 10) // 2
+    
+    def get_modifier_string(self, ability_score: int) -> str:
+        """Get formatted modifier string with +/- sign."""
+        modifier = self.get_ability_modifier(ability_score)
+        return f"+{modifier}" if modifier >= 0 else str(modifier)
+    
+    def get_stat_modifiers(self) -> Dict[str, int]:
+        """Get all ability modifiers."""
+        return {
+            "Strength": self.get_ability_modifier(self.strength),
+            "Dexterity": self.get_ability_modifier(self.dexterity),
+            "Constitution": self.get_ability_modifier(self.constitution),
+            "Intelligence": self.get_ability_modifier(self.intelligence),
+            "Wisdom": self.get_ability_modifier(self.wisdom),
+            "Charisma": self.get_ability_modifier(self.charisma)
+        }
+    
+    def get_saving_throw_modifier(self, ability: str) -> int:
+        """Get saving throw modifier for an ability."""
+        base_modifier = self.get_stat_modifiers()[ability]
+        if ability in self.saving_throw_proficiencies:
+            return base_modifier + self.proficiency_bonus
+        return base_modifier
+    
+    def get_skill_modifier(self, skill: str) -> int:
+        """Get skill modifier. Skills map to abilities."""
+        skill_to_ability = {
+            "Acrobatics": "Dexterity", "Animal Handling": "Wisdom", "Arcana": "Intelligence",
+            "Athletics": "Strength", "Deception": "Charisma", "History": "Intelligence",
+            "Insight": "Wisdom", "Intimidation": "Charisma", "Investigation": "Intelligence",
+            "Medicine": "Wisdom", "Nature": "Intelligence", "Perception": "Wisdom",
+            "Performance": "Charisma", "Persuasion": "Charisma", "Religion": "Intelligence",
+            "Sleight of Hand": "Dexterity", "Stealth": "Dexterity", "Survival": "Wisdom"
+        }
+        
+        ability = skill_to_ability.get(skill, "Strength")
+        base_modifier = self.get_stat_modifiers()[ability]
+        
+        if skill in self.skill_proficiencies:
+            return base_modifier + self.proficiency_bonus
+        return base_modifier
+    
+    def level_up(self):
+        """Handle level up mechanics."""
+        self.level += 1
+        
+        # Update proficiency bonus
+        self.proficiency_bonus = 2 + ((self.level - 1) // 4)
+        
+        # Add hit points (simplified - normally you'd roll hit dice)
+        con_modifier = self.get_ability_modifier(self.constitution)
+        hp_gain = max(1, 5 + con_modifier)  # Average of d8 + CON mod
+        self.max_hp += hp_gain
+        self.hp += hp_gain
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert character to dictionary for JSON serialization."""
         return {
+            # Basic Info
             "name": self.name,
+            "race": self.race,
+            "character_class": self.character_class,
+            "level": self.level,
+            "background": self.background,
+            "alignment": self.alignment,
+            
+            # Stats
+            "strength": self.strength,
+            "dexterity": self.dexterity,
+            "constitution": self.constitution,
+            "intelligence": self.intelligence,
+            "wisdom": self.wisdom,
+            "charisma": self.charisma,
+            
+            # Health and Combat
             "hp": self.hp,
             "max_hp": self.max_hp,
-            "inventory": self.inventory
+            "armor_class": self.armor_class,
+            "proficiency_bonus": self.proficiency_bonus,
+            
+            # Skills and Proficiencies
+            "skill_proficiencies": self.skill_proficiencies,
+            "saving_throw_proficiencies": self.saving_throw_proficiencies,
+            
+            # Inventory and Equipment
+            "inventory": self.inventory,
+            "equipment": self.equipment,
+            
+            # Progression
+            "experience_points": self.experience_points,
+            "gold_pieces": self.gold_pieces
         }
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Character':
         """Create character from dictionary."""
         return cls(
+            # Basic Info
             name=data["name"],
+            race=data.get("race", "Human"),
+            character_class=data.get("character_class", "Fighter"),
+            level=data.get("level", 1),
+            background=data.get("background", "Folk Hero"),
+            alignment=data.get("alignment", "Neutral Good"),
+            
+            # Stats
+            strength=data.get("strength", 10),
+            dexterity=data.get("dexterity", 10),
+            constitution=data.get("constitution", 10),
+            intelligence=data.get("intelligence", 10),
+            wisdom=data.get("wisdom", 10),
+            charisma=data.get("charisma", 10),
+            
+            # Health and Combat
             hp=data["hp"],
             max_hp=data["max_hp"],
-            inventory=data.get("inventory", [])
+            armor_class=data.get("armor_class", 10),
+            proficiency_bonus=data.get("proficiency_bonus", 2),
+            
+            # Skills and Proficiencies
+            skill_proficiencies=data.get("skill_proficiencies", []),
+            saving_throw_proficiencies=data.get("saving_throw_proficiencies", []),
+            
+            # Inventory and Equipment
+            inventory=data.get("inventory", []),
+            equipment=data.get("equipment", {}),
+            
+            # Progression
+            experience_points=data.get("experience_points", 0),
+            gold_pieces=data.get("gold_pieces", 0)
         )
 
 
@@ -48,6 +222,13 @@ class GameState:
     
     def save_to_json(self, file_path: str) -> None:
         """Save the entire game state to a JSON file."""
+        import os
+        
+        # Ensure the directory exists
+        save_dir = os.path.dirname(file_path)
+        if save_dir and not os.path.exists(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
+        
         game_data = {
             "player": self.player.to_dict(),
             "story_history": self.story_history,
